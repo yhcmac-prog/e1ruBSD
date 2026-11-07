@@ -1,0 +1,23 @@
+# build products
+build/
+*.o
+*.elf
+*.img
+
+# VirtualBox / VM artifacts
+.vbox/
+.vbox-test/
+*.vdi
+*.vbox
+*.vbox-prev
+
+# logs and captures
+*.log
+*.png
+
+# tool caches
+zig-cache/
+.zig-cache/
+
+# macOS
+.DS_Store

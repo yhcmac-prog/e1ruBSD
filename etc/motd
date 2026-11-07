@@ -1,0 +1,7 @@
+Welcome to e1ruBSD 0.1 (RUNE) -- a from-scratch POSIX-flavored BSD.
+
+  e1ruBSD is a small educational operating system in the NetBSD tradition:
+  custom bootloader, paging pmap, round-robin scheduler, vnode/ramfs VFS,
+  autoconf device model and a ring-3 userland speaking int 0x80.
+
+Try: help, ls, cat /etc/motd, e1rufetch, ps, uptime, uname -r
