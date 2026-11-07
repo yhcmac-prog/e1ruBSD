@@ -37,9 +37,17 @@ int	 meminfo(struct meminfo *mi);
 unsigned long uptime_secs(void);
 void	 sleep_ms(unsigned long ms);
 void	 reboot(void) __attribute__((noreturn));
+void	 poweroff(void) __attribute__((noreturn));
+void	 halt(void) __attribute__((noreturn));
 int	 chdir(const char *path);
 char	*getcwd(char *buf, size_t len);
 int	 uname(struct utsname *u);
+int	 mkdir(const char *path);
+int	 rmdir(const char *path);
+int	 unlink(const char *path);
+int	 chmod(const char *path, unsigned mode);
+int	 stat(const char *path, struct e1stat *st);
+void	 gettime(struct rtc_time *rt);
 
 /* string.c */
 size_t	 strlen(const char *s);

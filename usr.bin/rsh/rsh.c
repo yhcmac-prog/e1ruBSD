@@ -15,6 +15,9 @@ help(void)
 	printf("builtins: help clear cd pwd exit\n");
 	printf("commands:\n");
 	printf("  ls cat echo write ps uptime uname clear reboot e1rufetch\n");
+	printf("  mkdir rmdir rm touch chmod stat date\n");
+	printf("  halt poweroff shutdown pkg\n");
+	printf("try: pkg available; pkg install hello; hello\n");
 }
 
 static char *

@@ -11,11 +11,22 @@ pmap、轮转调度器、vnode/ramfs VFS、autoconf 设备模型，以及通过 
 - 启动 banner、E820/pmap 初始化、设备探测、ramfs 解包、exec `/init`
 - `/init` 进入用户态后 exec `/bin/rsh`，出现 `e1ru$` 提示符
 - 外部命令与内建命令均可用（`ls`/`cat`/`echo`/`write`/`ps`/`uptime`/`uname`/
-  `clear`/`reboot`/`e1rufetch`，内建 `help`/`clear`/`cd`/`pwd`/`exit`）
+  `clear`/`e1rufetch`/`mkdir`/`rmdir`/`rm`/`touch`/`chmod`/`stat`/`date`/
+  `halt`/`poweroff`/`reboot`/`shutdown`/`pkg`，内建
+  `help`/`clear`/`cd`/`pwd`/`exit`）
 - IRQ0（100 Hz 定时器）与 IRQ1（键盘）正常
 - 用户态 `int $0x80` 与 `int3` 都能正确进入 trap 入口
 
-本轮（2026-11-07）新增并逐项构建 + 实测：
+本轮（2026-11-07，第二轮）新增并逐项构建 + VirtualBox 实测：
+
+| 项 | 实现 | 实测结果 |
+| -- | ---- | ----- |
+| 关机/重启 | `sys_reboot` 增加 `REBOOT_POWEROFF`/`REBOOT_HALT`：扫描 EBDA/BIOS 区找 RSDP，解析 FADT 与 DSDT 的 `\_S5_`，向 PM1a_CNT 写入 `SLP_TYP<<10 | SLP_EN`；重启优先用 FADT reset register，后备 0xCF9、8042 0xFE、三重故障 | `poweroff` 后 `VBoxManage` 显示 `VMState="poweroff"`；`reboot` / `shutdown -r` 后重新引导，`uptime` 回到 5 秒 |
+| ACPI/RTC | 新增 `sys/dev/acpi.c`、`sys/dev/rtc.c`；启动 dmesg 输出 `acpi0 at mainbus: FADT rev 4, PM1a 0x4004, S5 5/5` 与 `rtc0` | `date` 输出 `Sat Nov  7 19:40:15 2026`（直接读 CMOS，不做时区换算） |
+| 文件系统命令 | 新增 `mkdir`（含 `-p`）/`rmdir`/`rm`/`touch`/`chmod`/`stat` 及对应系统调用；ramfs 增加 remove、mode、vnode/节点释放 | `mkdir -p /a/b/c`、`touch`、`chmod 600`、`stat`（`mode 600`）、`rmdir` 非空失败、递归卸载后目录清空均通过 |
+| e1pkg | 本地包管理器：ustar 包 + 文本 manifest，安装到 `/`，数据库 `/var/db/e1pkg`，支持 install/remove/list/available；示例包 `hello` | `pkg install hello` → `hello` 输出 `hello from e1pkg!`；`stat /bin/hello` 显示 `mode 755`；`pkg list`/`pkg remove hello` 后文件与目录消失 |
+
+上一轮（COW/多页 malloc/trap 退出码）记录：
 
 | 项 | 实现 | 实测结果 |
 | -- | ---- | ----- |
@@ -31,10 +42,12 @@ pmap、轮转调度器、vnode/ramfs VFS、autoconf 设备模型，以及通过 
 ## 未做项与原因
 
 - **ramfs 持久化：未做。** 当前没有任何可写块设备驱动：`sys/dev` 只有
-  `autoconf/clock/cons/pckbd/md`，其中 `md` 是从 ramdisk 复制的只读内存盘。
-  持久化需要 ATA/AHCI（或 virtio-blk）驱动、磁盘分区布局、ramfs 写回路径；
-  这是一整条新驱动链，不适合在本轮最小改动中塞进来。ramfs 只读挂载、
-  文件可创建但仅在内存中存活。
+  `autoconf/clock/cons/pckbd/md`（另加只读用途的 `acpi/rtc`），其中 `md`
+  是从 ramdisk 复制的只读内存盘。持久化需要 ATA/AHCI（或 virtio-blk）
+  驱动、磁盘分区布局、ramfs 写回路径；这是一整条新驱动链，不适合在本轮
+  最小改动中塞进来。ramfs 可创建/删除文件与目录，但只在内存中存活。
+  `e1pkg` 的安装文件和 `/var/db/e1pkg` 数据库同样不跨重启保留，因此
+  每次重启后需要重新 `pkg install`（命令输出中也会提示这一点）。
 - **需求分页：未做。** 需求分页需要 vnode-backed page cache、page-in 路径、
   fault 分类（缺页/保护/栈增长）以及和 exec 的段映射协同。当前 `exec`
   一次性映射全部段与栈、`fork` 用 COW 共享，已足以支撑现有用户态；
@@ -108,11 +121,32 @@ BIOS → bootsect (LBA 0, 0x7C00) → stage2 (0x7E00, real mode)
 ISR stub 收敛到 `alltraps` → `trap(tf, p)`。用户态异常按
 `128 + signal` 记录退出码并终止进程（`int3` → 133），内核态异常
 panic 并停 CPU。系统调用走 `int $0x80`（门类型 `0xEE`），
-`rax`=编号、`rdi`/`rsi`/`rdx` 传参、`rax` 返回，共 19 个调用
+`rax`=编号、`rdi`/`rsi`/`rdx` 传参、`rax` 返回，共 25 个调用
 （见 `sys/sys/syscall.h`）。
 
 **VFS/ramfs.** vnode + 简单 VFS 层；ramfs 由 stage2 载入的 tar 解包填充，
-`md0` 是只读内存盘副本；支持读、列目录、建文件、写内存文件。
+`md0` 是只读内存盘副本；支持读、列目录、建文件/目录、写内存文件、
+删除文件/空目录、chmod 权限位与 stat 元数据。删除时节点从目录链摘除，
+节点与 vnode 内存等到最后一个引用释放（`vn_inactive`）才回收。
+
+**关机与重启.** `sys/dev/acpi.c` 不实现 AML 解释器，只做两件事：
+在 EBDA 与 `0xE0000–0xFFFFF` 扫描 `RSD PTR ` 校验和，经 RSDT/XSDT
+找到 FADT；再扫描 DSDT 中的 `Name(\_S5_, Package(...))` 取得 SLP_TYP。
+`poweroff` 向 FADT 给出的 PM1a/PM1b 控制块写
+`(SLP_TYP << 10) | SLP_EN` 进入 S5。`reboot` 优先使用 FADT reset
+register，随后依次尝试 0xCF9、8042 `0xFE`，最后加载空 IDT 触发三重
+故障。若 ACPI 表缺失，`poweroff` 再尝试 QEMU/Bochs/PIIX4 的传统端口
+（0x4004/0xB004/0x604），都失败则打印提示并 `cli; hlt`。
+`halt` 只关中断并停机，不改变 VM 电源状态（实测 VM 仍为 running）。
+
+**e1pkg 包管理.** 包是 ustar 归档，放在 ramfs 的 `/packages` 下；首个
+成员 `manifest` 是文本，例如 `name=hello`、`version=1.0`、`desc=...`、
+`exec=/bin/hello`。`pkg install` 在用户态逐条解析 tar（512 字节头 + 数据），
+按成员路径在 `/` 下递归建目录并写文件，`exec=` 条目 chmod 0755；安装
+清单（名称、版本、描述、每个文件路径）写入 `/var/db/e1pkg/<name>`。
+`pkg remove` 读取清单逐个 `unlink`，再自底向上 `rmdir` 空目录，最后
+删除数据库文件；`pkg list` 汇总清单，`pkg available` 列出 `/packages/*.pkg`。
+受 ramfs 限制，安装状态不跨重启；包源随镜像只读发布，不涉及网络下载。
 
 ## 已知限制
 
@@ -128,7 +162,12 @@ panic 并停 CPU。系统调用走 `int $0x80`（门类型 `0xEE`），
 - `NPROC=16`，内核栈为 16 槽 × 16 KB 的连续池。
 - `malloc(size > 4096)` 要求物理连续页；碎片化严重时可能失败（返回 NULL）。
 - 无信号处理机制；用户异常只打印一行并终止进程（退出码 `128+signal`）。
-- ramfs 无持久化，重启后回到镜像初始内容。
+- ramfs 无持久化，重启后回到镜像初始内容；`e1pkg` 的安装状态同样丢失。
+- 没有可写块设备驱动，也没有包下载/网络源；包只能从镜像内 `/packages` 安装。
+- `date` 直接输出固件 RTC 时间，不做时区换算；无 NTP、无系统时间设置接口。
+- `shutdown` 的时间参数被接受但忽略：没有持久定时器或 wall-clock 调度。
+- 没有 `cp`/`mv`/编辑器或脚本解释器；现有命令覆盖文件创建、删除、权限与
+  包管理，复杂文本处理仍不具备。
 - 系统调用最多 3 个参数，无 syscall 重启/错误码约定（负数直接作为返回值）。
 
 ## 仓库结构
@@ -138,10 +177,11 @@ sys/arch/amd64/boot/     bootsect.S / stage2.S / 链接脚本
 sys/arch/amd64/amd64/    locore.S, cpu.c, pmap.c, trap.c
 sys/arch/amd64/include/  machine/cpu.h, machine/pmap.h
 sys/kern/                init_main, sched, syscalls, exec_elf, vfs_subr, malloc
-sys/dev/                 autoconf, cons, clock, pckbd, md
-sys/fs/ramfs.c           内存文件系统
+sys/dev/                 autoconf, cons, clock, pckbd, md, acpi, rtc
+sys/fs/ramfs.c           内存文件系统（含 remove/chmod）
 lib/libc/                用户态最小 libc 与 crt0
-usr.bin/                 init, rsh, ls, cat, echo, write, ps, ...
+usr.bin/                 init, rsh, ls, pkg, mkdir, date, poweroff, ...
+pkg/hello/               示例包源（manifest + README，构建成 packages/hello.pkg）
 tools/                   mkramdisk.py, mkimage.py
 build.sh, run-vbox.sh
 ```

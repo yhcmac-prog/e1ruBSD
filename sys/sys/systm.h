@@ -8,6 +8,7 @@
 
 struct trapframe;
 struct proc;
+struct rtc_time;
 
 /* subr_prf.c */
 void	 kprintf(const char *fmt, ...);
@@ -26,6 +27,14 @@ int	 strncmp(const char *a, const char *b, size_t n);
 char	*strncpy(char *dst, const char *src, size_t n);
 size_t	 strlcpy(char *dst, const char *src, size_t n);
 char	*strchr(const char *s, int c);
+
+/* dev/acpi.c */
+int	 acpi_init(void);
+int	 acpi_poweroff(void);
+int	 acpi_reboot(void);
+
+/* dev/rtc.c */
+void	 rtc_read(struct rtc_time *);
 
 /* init_main.c */
 void	 x86_boot(void);

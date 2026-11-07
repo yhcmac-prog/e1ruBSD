@@ -109,9 +109,61 @@ sleep_ms(unsigned long ms)
 void
 reboot(void)
 {
-	syscall4(SYS_reboot, 0, 0, 0);
+	syscall4(SYS_reboot, REBOOT_REBOOT, 0, 0);
 	for (;;)
 		;
+}
+
+void
+poweroff(void)
+{
+	syscall4(SYS_reboot, REBOOT_POWEROFF, 0, 0);
+	for (;;)
+		;
+}
+
+void
+halt(void)
+{
+	syscall4(SYS_reboot, REBOOT_HALT, 0, 0);
+	for (;;)
+		;
+}
+
+int
+mkdir(const char *path)
+{
+	return (int)syscall4(SYS_mkdir, (long)path, 0, 0);
+}
+
+int
+rmdir(const char *path)
+{
+	return (int)syscall4(SYS_rmdir, (long)path, 0, 0);
+}
+
+int
+unlink(const char *path)
+{
+	return (int)syscall4(SYS_remove, (long)path, 0, 0);
+}
+
+int
+chmod(const char *path, unsigned mode)
+{
+	return (int)syscall4(SYS_chmod, (long)path, (long)mode, 0);
+}
+
+int
+stat(const char *path, struct e1stat *st)
+{
+	return (int)syscall4(SYS_stat, (long)path, (long)st, 0);
+}
+
+void
+gettime(struct rtc_time *rt)
+{
+	syscall4(SYS_gettime, (long)rt, 0, 0);
 }
 
 int

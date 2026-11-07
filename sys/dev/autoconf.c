@@ -21,8 +21,6 @@ extern void md_init(uint64_t pa, uint64_t size);
 extern uint64_t md_size_bytes(void);
 extern struct bootinfo bootinfo;
 
-static struct device mainbus;
-
 void
 device_attached(const char *bus, struct device *dv, const char *info)
 {
@@ -85,6 +83,20 @@ attach_md(void)
 	device_attached("mainbus", &dv, NULL);
 }
 
+static void
+attach_acpi(void)
+{
+	(void)acpi_init();			/* prints its own dmesg line */
+}
+
+static void
+attach_rtc(void)
+{
+	static struct device dv = { "rtc", 0, NULL };
+
+	device_attached("mainbus", &dv, "CMOS clock");
+}
+
 void
 autoconf(void)
 {
@@ -94,5 +106,7 @@ autoconf(void)
 	attach_com();
 	attach_pit();
 	attach_pckbc();
+	attach_acpi();
+	attach_rtc();
 	attach_md();
 }

@@ -41,7 +41,7 @@ for src in \
     sys/kern/subr_malloc.c sys/kern/syscalls.c sys/kern/vfs_subr.c \
     sys/kern/exec_elf.c sys/kern/subr_tar.c \
     sys/dev/cons.c sys/dev/pckbd.c sys/dev/clock.c sys/dev/md.c \
-    sys/dev/autoconf.c \
+    sys/dev/acpi.c sys/dev/rtc.c sys/dev/autoconf.c \
     sys/fs/ramfs.c \
     sys/libkern/libkern.c \
     sys/arch/amd64/amd64/cpu.c sys/arch/amd64/amd64/pmap.c \
@@ -70,17 +70,25 @@ for src in $ULIBC; do
     ULIBOBJ="$ULIBOBJ $obj"
 done
 
-for prog in init rsh ls cat echo write ps uptime uname clear reboot e1rufetch; do
+for prog in init rsh ls cat echo write ps uptime uname clear reboot \
+    e1rufetch mkdir rmdir rm touch chmod stat date halt poweroff shutdown \
+    pkg hello; do
     pobj="build/obj/usr.bin_${prog}.o"
     $CC $UCFLAGS -c "usr.bin/$prog/$prog.c" -o "$pobj"
     $ZIG ld.lld -m elf_x86_64 -T lib/libc/user.ld $pobj $ULIBOBJ \
         -o "build/bin/$prog"
 done
 
+# hello is not part of the base image: ship it as packages/hello.pkg
+python3 tools/mkramdisk.py build/hello.pkg \
+    "manifest=pkg/hello/manifest" \
+    "bin/hello=build/bin/hello" \
+    "share/doc/hello/README=pkg/hello/README"
+
 # ---------------- ramdisk ----------------
 echo "== [4/5] ramdisk =="
 python3 tools/mkramdisk.py build/ramdisk.tar \
-    "bin/" "etc/" \
+    "bin/" "etc/" "packages/" \
     "init=build/bin/init" \
     "bin/rsh=build/bin/rsh" "bin/ls=build/bin/ls" \
     "bin/cat=build/bin/cat" "bin/echo=build/bin/echo" \
@@ -88,6 +96,13 @@ python3 tools/mkramdisk.py build/ramdisk.tar \
     "bin/uptime=build/bin/uptime" "bin/uname=build/bin/uname" \
     "bin/clear=build/bin/clear" "bin/reboot=build/bin/reboot" \
     "bin/e1rufetch=build/bin/e1rufetch" \
+    "bin/mkdir=build/bin/mkdir" "bin/rmdir=build/bin/rmdir" \
+    "bin/rm=build/bin/rm" "bin/touch=build/bin/touch" \
+    "bin/chmod=build/bin/chmod" "bin/stat=build/bin/stat" \
+    "bin/date=build/bin/date" "bin/halt=build/bin/halt" \
+    "bin/poweroff=build/bin/poweroff" "bin/shutdown=build/bin/shutdown" \
+    "bin/pkg=build/bin/pkg" \
+    "packages/hello.pkg=build/hello.pkg" \
     "etc/motd=etc/motd"
 
 # ---------------- disk image ----------------

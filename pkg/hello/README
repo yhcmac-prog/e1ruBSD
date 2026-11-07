@@ -1,0 +1,12 @@
+hello 1.0
+
+This file is installed by e1pkg as /share/doc/hello/README.
+
+The package payload is a ustar archive whose first member is a
+plain-text manifest (name, version, desc, exec entries).  e1pkg
+unpacks the remaining members relative to /, records the installed
+paths in /var/db/e1pkg/hello, and can remove them again with
+"pkg remove hello".
+
+The root filesystem is ramfs: installed files and the package
+database disappear on reboot.

@@ -24,6 +24,7 @@
 #define	ENOMEM	12
 #define	EBADF	9
 #define	EFAULT	14
+#define	EEXIST	17
 
 #define	USER_PTR_OK(p, n) \
 	((uint64_t)(p) < 0x0000800000000000UL && (uint64_t)(p) + (n) < 0x0000800000000000UL)
@@ -373,14 +374,73 @@ sys_sleep(struct proc *p, struct trapframe *tf)
 	return 0;
 }
 
+static void
+cpu_halt_forever(const char *msg)
+{
+	kprintf("%s\n", msg);
+	cli();
+	for (;;)
+		hlt();
+}
+
+/* Last-resort reset: load an empty IDT and trigger a fault. */
+static void
+triple_fault(void)
+{
+	struct {
+		uint16_t	limit;
+		uint64_t	base;
+	} __attribute__((packed)) idtr;
+
+	idtr.limit = 0;
+	idtr.base = 0;
+	__asm__ volatile("lidt %0; int3" :: "m"(idtr));
+	for (;;)
+		;
+}
+
 static int64_t
 sys_reboot(struct proc *p, struct trapframe *tf)
 {
-	kprintf("rebooting...\n");
-	for (;;) {
-		outb(0x64, 0xFE);		/* 8042 pulse reset */
+	uint64_t mode = tf->rdi;
+
+	(void)p;
+	switch (mode) {
+	case REBOOT_POWEROFF:
+		kprintf("powering off...\n");
+		(void)acpi_poweroff();		/* S5 via the FADT tables */
+		/*
+		 * Legacy PM controllers used by QEMU/Bochs and PIIX4
+		 * implementations; harmless when ACPI already worked.
+		 */
+		for (volatile int i = 0; i < 5000000; i++)
+			io_wait();
+		outw(0x4004, 0x3400);
+		outw(0xB004, 0x2000);
+		outw(0x604, 0x2000);
+		for (volatile int i = 0; i < 5000000; i++)
+			io_wait();
+		cpu_halt_forever("poweroff failed; system halted");
+		break;
+	case REBOOT_HALT:
+		cpu_halt_forever("system halted");
+		break;
+	case REBOOT_REBOOT:
+	default:
+		kprintf("rebooting...\n");
+		(void)acpi_reboot();		/* FADT reset register */
+		for (volatile int i = 0; i < 100000; i++)
+			io_wait();
+		outb(0xCF9, 0x06);		/* Intel reset control port */
 		for (volatile int i = 0; i < 1000000; i++)
 			;
+		for (int i = 0; i < 10; i++) {
+			outb(0x64, 0xFE);	/* 8042 pulse reset */
+			for (volatile int j = 0; j < 1000000; j++)
+				;
+		}
+		triple_fault();
+		break;
 	}
 	return 0;
 }
@@ -466,6 +526,119 @@ sys_getcwd(struct proc *p, struct trapframe *tf)
 	return strlen(ubuf);
 }
 
+static int64_t
+sys_mkdir(struct proc *p, struct trapframe *tf)
+{
+	const char *upath = (const char *)tf->rdi;
+	char path[MAXPATHLEN], name[MAXNAMELEN];
+	struct vnode *dvp, *vp = NULL;
+	int err;
+
+	if (!USER_PTR_OK(upath, 1))
+		return -EFAULT;
+	strlcpy(path, upath, MAXPATHLEN);
+	if (vfs_parent(path, p, &dvp, name, sizeof(name)) != 0)
+		return -ENOENT;
+	if (dvp->v_op->vn_mkdir == NULL) {
+		vn_unref(dvp);
+		return -EINVAL;
+	}
+	err = dvp->v_op->vn_mkdir(dvp, name, &vp);
+	vn_unref(dvp);
+	if (vp != NULL)
+		vn_unref(vp);
+	return err ? -EEXIST : 0;
+}
+
+static int64_t
+sys_remove_common(struct proc *p, struct trapframe *tf, int isdir)
+{
+	const char *upath = (const char *)tf->rdi;
+	char path[MAXPATHLEN], name[MAXNAMELEN];
+	struct vnode *dvp;
+	int err;
+
+	if (!USER_PTR_OK(upath, 1))
+		return -EFAULT;
+	strlcpy(path, upath, MAXPATHLEN);
+	if (vfs_parent(path, p, &dvp, name, sizeof(name)) != 0)
+		return -ENOENT;
+	if (dvp->v_op->vn_remove == NULL) {
+		vn_unref(dvp);
+		return -EINVAL;
+	}
+	err = dvp->v_op->vn_remove(dvp, name, isdir);
+	vn_unref(dvp);
+	return err ? -EINVAL : 0;
+}
+
+static int64_t
+sys_remove(struct proc *p, struct trapframe *tf)
+{
+	return sys_remove_common(p, tf, 0);
+}
+
+static int64_t
+sys_rmdir(struct proc *p, struct trapframe *tf)
+{
+	return sys_remove_common(p, tf, 1);
+}
+
+static int64_t
+sys_chmod(struct proc *p, struct trapframe *tf)
+{
+	const char *upath = (const char *)tf->rdi;
+	uint64_t mode = tf->rsi;
+	char path[MAXPATHLEN];
+	struct vnode *vp;
+	int err;
+
+	if (!USER_PTR_OK(upath, 1))
+		return -EFAULT;
+	strlcpy(path, upath, MAXPATHLEN);
+	if (namei(path, p, &vp) != 0)
+		return -ENOENT;
+	if (vp->v_op->vn_chmod == NULL) {
+		vn_unref(vp);
+		return -EINVAL;
+	}
+	err = vp->v_op->vn_chmod(vp, (uint32_t)mode);
+	vn_unref(vp);
+	return err ? -EINVAL : 0;
+}
+
+static int64_t
+sys_stat(struct proc *p, struct trapframe *tf)
+{
+	const char *upath = (const char *)tf->rdi;
+	struct e1stat *st = (struct e1stat *)tf->rsi;
+	char path[MAXPATHLEN];
+	struct vnode *vp;
+
+	if (!USER_PTR_OK(upath, 1) || !USER_PTR_OK(st, sizeof(*st)))
+		return -EFAULT;
+	strlcpy(path, upath, MAXPATHLEN);
+	if (namei(path, p, &vp) != 0)
+		return -ENOENT;
+	st->st_size = vp->v_size;
+	st->st_ino = vp->v_ino;
+	st->st_mode = vp->v_mode;
+	st->st_type = (uint32_t)vp->v_type;
+	vn_unref(vp);
+	return 0;
+}
+
+static int64_t
+sys_gettime(struct proc *p, struct trapframe *tf)
+{
+	struct rtc_time *rt = (struct rtc_time *)tf->rdi;
+
+	if (!USER_PTR_OK(rt, sizeof(*rt)))
+		return -EFAULT;
+	rtc_read(rt);
+	return 0;
+}
+
 int64_t
 syscall_dispatch(struct trapframe *tf, struct proc *p)
 {
@@ -489,6 +662,12 @@ syscall_dispatch(struct trapframe *tf, struct proc *p)
 	case SYS_uptime:	return sys_uptime(p, tf);
 	case SYS_chdir:		return sys_chdir(p, tf);
 	case SYS_getcwd:	return sys_getcwd(p, tf);
+	case SYS_remove:	return sys_remove(p, tf);
+	case SYS_mkdir:		return sys_mkdir(p, tf);
+	case SYS_rmdir:		return sys_rmdir(p, tf);
+	case SYS_chmod:		return sys_chmod(p, tf);
+	case SYS_stat:		return sys_stat(p, tf);
+	case SYS_gettime:	return sys_gettime(p, tf);
 	default:
 		kprintf("pid %d: bad syscall %d\n", p ? p->p_pid : 0,
 		    (int)tf->rax);

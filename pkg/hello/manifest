@@ -1,0 +1,4 @@
+name=hello
+version=1.0
+desc=demo package for e1pkg
+exec=/bin/hello

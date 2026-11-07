@@ -50,23 +50,24 @@ cons_getattr(struct vnode *vp, uint64_t *sizep, enum vtype *typep)
 }
 
 static int
-cons_nop(void)
+cons_nop(struct vnode *vp)
 {
+	(void)vp;
 	return 0;
 }
 
 static const struct vnodeops cons_vops = {
-	NULL,			/* lookup */
-	NULL,			/* create */
-	NULL,			/* mkdir */
-	cons_read_vn,
-	cons_write_vn,
-	cons_getattr,
-	NULL,			/* readdir */
-	(int (*)(struct vnode *))cons_nop,
+	.vn_read = cons_read_vn,
+	.vn_write = cons_write_vn,
+	.vn_getattr = cons_getattr,
+	.vn_inactive = cons_nop,
 };
 
-static struct vnode	 cons_vp = { VCHR, NULL, &cons_vops, NULL, 0, 0, 2 };
+static struct vnode	 cons_vp = {
+	.v_type = VCHR,
+	.v_op = &cons_vops,
+	.v_refcnt = 2,
+};
 
 struct vnode *
 vp_console(void)
@@ -155,6 +156,53 @@ namei(const char *path, struct proc *p, struct vnode **vpp)
 		vp = nv;
 	}
 	*vpp = vp;
+	return 0;
+}
+
+/*
+ * Resolve the parent directory of path and return the final component.
+ * Used by mkdir(2), rmdir(2) and unlink(2); "." and ".." are refused.
+ */
+int
+vfs_parent(const char *path, struct proc *p, struct vnode **dvpp, char *name,
+    size_t namelen)
+{
+	char buf[MAXPATHLEN], dir[MAXPATHLEN];
+	char *slash = NULL;
+	size_t len;
+
+	if (path == NULL || path[0] == '\0')
+		return -1;
+	strlcpy(buf, path, sizeof(buf));
+	len = strlen(buf);
+	while (len > 1 && buf[len - 1] == '/')
+		buf[--len] = '\0';
+	if (buf[0] == '\0' || strcmp(buf, "/") == 0)
+		return -1;
+	for (char *s = buf; *s; s++)
+		if (*s == '/')
+			slash = s;
+	if (slash == NULL) {
+		strlcpy(dir, ".", sizeof(dir));
+		strlcpy(name, buf, namelen);
+	} else {
+		strlcpy(name, slash + 1, namelen);
+		if (slash == buf) {
+			strlcpy(dir, "/", sizeof(dir));
+		} else {
+			*slash = '\0';
+			strlcpy(dir, buf, sizeof(dir));
+		}
+	}
+	if (name[0] == '\0' || strcmp(name, ".") == 0 ||
+	    strcmp(name, "..") == 0)
+		return -1;
+	if (namei(dir, p, dvpp) != 0)
+		return -1;
+	if ((*dvpp)->v_type != VDIR) {
+		vn_unref(*dvpp);
+		return -1;
+	}
 	return 0;
 }
 

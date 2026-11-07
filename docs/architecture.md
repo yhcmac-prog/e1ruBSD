@@ -119,28 +119,43 @@ pm_free_page()           -> ref > 1 则递减；否则归零并回收到空闲�
 - IRQ0（PIT 100 Hz）维护 tick 并触发调度；IRQ1 读键盘扫描码。
 - 系统调用：`int $0x80`，门类型 `0xEE`（中断门，进入时清 IF）。
   ABI：`rax`=编号，`rdi`/`rsi`/`rdx` 为参数，返回值在 `rax`。
-  `NSYSCALL=19`，见 `sys/sys/syscall.h`。
+  `NSYSCALL=25`，见 `sys/sys/syscall.h`。`SYS_reboot` 的 `rdi` 现在是
+  模式：0 重启、1 关机、2 停机。
 
 ## 5. VFS 与 ramfs
 
-- `sys/sys/vfs.h` 定义 `struct vnode` 与 `v_op`（lookup/create/read/
-  write/readdir/inactive 等）。
-- `sys/kern/vfs_subr.c` 提供 `namei()`、`vfs_mountroot()`、vnode 缓存
-  与引用计数；`/init` 与 `/bin/*` 都通过它解析。
+- `sys/sys/vfs.h` 定义 `struct vnode`（含 `v_mode`）与 `v_op`（lookup/
+  create/mkdir/read/write/readdir/inactive/remove/chmod 等）。
+- `sys/kern/vfs_subr.c` 提供 `namei()`、`vfs_parent()`、`vfs_mountroot()`、
+  vnode 缓存与引用计数；`/init` 与 `/bin/*` 都通过它解析。
 - `sys/dev/md.c` 把 stage2 放在 `0x400000` 的 ramdisk 映射成只读内存盘
   `md0`，并提供块读取接口。
 - `sys/kern/subr_tar.c` 从 `md0` 读 tar，解包进 ramfs。
 - `sys/fs/ramfs.c` 是纯内存文件系统：目录项与文件数据都在内核堆上，
-  支持创建/写入/截断，但进程退出与重启都不会保留。`vn_open()` 的
-  `O_TRUNC` 通过一次“offset 0、长度 0”的写调用表达，ramfs 在该调用里
-  释放全部数据块并把大小归零；其余读写路径对 `donep == NULL` 也做了
-  保护（历史 bug：该调用曾因解引用空 `donep` 触发内核页故障）。
+  支持创建/写入/截断/删除/chmod，但进程退出与重启都不会保留。
+  `vn_open()` 的 `O_TRUNC` 通过一次“offset 0、长度 0”的写调用表达，
+  ramfs 在该调用里释放全部数据块并把大小归零；其余读写路径对
+  `donep == NULL` 也做了保护（历史 bug：该调用曾因解引用空 `donep`
+  触发内核页故障）。删除会把节点从目录链摘除并释放数据块，节点与
+  vnode 内存等到最后一个引用释放（`vn_inactive`）才回收。
+
+## 5.1 电源控制与时钟
+
+- `sys/dev/acpi.c`：启动时扫描 EBDA / `0xE0000–0xFFFFF` 的 RSDP，
+  经 RSDT/XSDT 找到 FADT，再扫描 DSDT 的 `Name(\_S5_, Package(...))`
+  得到 SLP_TYP。`acpi_poweroff()` 写 PM1a/PM1b 控制块进入 S5；
+  `acpi_reboot()` 使用 FADT reset register（若存在）。
+- `sys_reboot()` 的后备顺序：ACPI → 0xCF9 → 8042 `0xFE` → 空 IDT
+  三重故障（重启）；ACPI → 0x4004/0xB004/0x604（关机）；`halt` 直接
+  `cli; hlt`。
+- `sys/dev/rtc.c` 从 CMOS 0x70/0x71 读时间，处理 UIP、BCD 与 12/24
+  小时模式，并用 Sakamoto 公式计算星期；`date` 原样输出，无时区换算。
 
 ## 6. 设备模型
 
 `sys/dev/autoconf.c` 是静态 autoconf：`mainbus` 下依次挂
-`cpu0`、`vga0`、`com0`、`pit0`、`pckbc0`/`pckbd0`、`md0`。
-设备探测顺序即初始化顺序，没有总线枚举。
+`cpu0`、`vga0`、`com0`、`pit0`、`pckbc0`/`pckbd0`、`acpi0`、`rtc0`、
+`md0`。设备探测顺序即初始化顺序，没有总线枚举。
 
 - `cons.c`：VGA 80×25 文本 + COM1 115200 串口；串口用于无界面调试。
 - `clock.c`：PIT 通道 0，100 Hz，注册 IRQ0。
@@ -153,7 +168,9 @@ pm_free_page()           -> ref > 1 则递减；否则归零并回收到空闲�
 1. clang（`x86_64-unknown-none-elf`）编译 bootsect/stage2/kernel/用户态；
 2. zig 自带 `ld.lld` 链接（不构建 compiler_rt）；
 3. `objcopy -O binary` 得到裸二进制；
-4. `tools/mkramdisk.py` 生成 tar（`/init`、`/bin/*`、`/etc/motd`）；
+4. `tools/mkramdisk.py` 生成 tar（`/init`、`/bin/*`、`/etc/motd`、
+   `/packages/hello.pkg`）；示例包由 `pkg/hello/manifest`、编译出的
+   `build/bin/hello` 与 `pkg/hello/README` 打成 ustar 归档；
 5. `tools/mkimage.py` 组装 16 MB raw 镜像：
    LBA0 bootsect，LBA1–62 stage2，LBA64 起 kernel，LBA2048 起 ramdisk。
 

@@ -33,6 +33,8 @@ struct vnodeops {
 	int	(*vn_readdir)(struct vnode *vp, uint64_t *cookiep, void *buf,
 		    size_t len, size_t *donep);
 	int	(*vn_inactive)(struct vnode *vp);
+	int	(*vn_remove)(struct vnode *dvp, const char *name, int isdir);
+	int	(*vn_chmod)(struct vnode *vp, uint32_t mode);
 };
 
 struct vnode {
@@ -43,6 +45,7 @@ struct vnode {
 	uint64_t		 v_size;
 	uint64_t		 v_ino;
 	int			 v_refcnt;
+	uint32_t		 v_mode;
 };
 
 struct vfsops {
@@ -73,6 +76,8 @@ struct dirent {
 /* vfs_subr.c */
 int	 vfs_mountroot(void);
 int	 namei(const char *path, struct proc *p, struct vnode **vpp);
+int	 vfs_parent(const char *path, struct proc *p, struct vnode **dvpp,
+	    char *name, size_t namelen);
 int	 vn_open(const char *path, int flags, struct file **fp);
 int	 vn_read(struct file *fp, void *buf, size_t len, size_t *donep);
 int	 vn_write(struct file *fp, const void *buf, size_t len, size_t *donep);
